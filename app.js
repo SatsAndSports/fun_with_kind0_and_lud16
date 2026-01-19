@@ -28,6 +28,12 @@ const DOM = {
     closeModal: document.querySelector('.close-btn')
 };
 
+// Helper to update status with logging
+function updateStatus(msg) {
+    console.log(`[Status Update] isRunning=${isRunning}: ${msg}`);
+    DOM.status.textContent = msg;
+}
+
 // --- Initialization ---
 function init() {
     renderRelays();
@@ -69,17 +75,17 @@ async function handleAddRelay() {
     if (!url || relays.includes(url)) return;
 
     DOM.addRelayBtn.disabled = true;
-    DOM.status.textContent = `Verifying ${url}...`;
+    updateStatus(`Verifying ${url}...`);
 
     const isValid = await verifyRelay(url);
     if (isValid) {
         relays.push(url);
         renderRelays();
         DOM.relayInput.value = '';
-        DOM.status.textContent = 'Relay added.';
+        updateStatus('Relay added.');
     } else {
         alert('Could not connect to relay.');
-        DOM.status.textContent = 'Failed to add relay.';
+        updateStatus('Failed to add relay.');
     }
     DOM.addRelayBtn.disabled = false;
 }
@@ -114,34 +120,43 @@ async function startDiscovery() {
     DOM.addressList.innerHTML = '';
     DOM.foundCount.textContent = '0';
     DOM.startBtn.textContent = 'Stop Discovery';
-    DOM.status.textContent = 'Connecting to relays...';
+    updateStatus('Connecting to relays...');
 
     const filter = { kinds: [0], limit: 50 };
     const sub = pool.subscribeMany(relays, [filter], {
         onevent(event) {
-            processEvent(event);
+            if (isRunning) processEvent(event);
         },
         oneose() {
-            DOM.status.textContent = 'Searching for more events...';
+            if (isRunning) {
+                updateStatus('Searching for more events...');
+            } else {
+                console.log('[Info] oneose ignored because isRunning is false');
+            }
         }
     });
 
     window.activeSub = sub;
 }
 
-function stopDiscovery() {
+function stopDiscovery(reason = "stopped") {
+    console.log(`[Action] stopDiscovery called with reason: ${reason}`);
     isRunning = false;
-    if (window.activeSub) window.activeSub.close();
+    if (window.activeSub) {
+        window.activeSub.close();
+        window.activeSub = null;
+    }
     DOM.startBtn.textContent = 'Start Discovery';
-    DOM.status.textContent = 'Discovery stopped.';
+    
+    if (reason === "goal") {
+        updateStatus('Goal reached: 21 unique addresses found.');
+    } else {
+        updateStatus('Discovery stopped.');
+    }
 }
 
 function processEvent(event) {
-    if (foundAddresses.size >= 21) {
-        stopDiscovery();
-        DOM.status.textContent = 'Goal reached: 21 unique addresses found.';
-        return;
-    }
+    if (!isRunning || foundAddresses.size >= 21) return;
 
     try {
         const content = JSON.parse(event.content);
@@ -168,10 +183,10 @@ function processEvent(event) {
             foundAddresses.set(lud16, pubkey);
             renderAddress(lud16, pubkey);
             DOM.foundCount.textContent = foundAddresses.size;
+            console.log(`[Discovery] Found address ${foundAddresses.size}/21: ${lud16}`);
 
             if (foundAddresses.size >= 21) {
-                stopDiscovery();
-                DOM.status.textContent = 'Goal reached: 21 unique addresses found.';
+                stopDiscovery("goal");
             }
         }
     } catch (e) {
