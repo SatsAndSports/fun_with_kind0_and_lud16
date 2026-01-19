@@ -312,7 +312,8 @@ function renderStatsModal(pubkey) {
         let content;
         try { content = JSON.parse(event.content); } catch (e) { content = {}; }
         
-        const date = new Date(event.created_at * 1000).toLocaleString();
+        const d = new Date(event.created_at * 1000);
+        const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         const nextEvent = history[index + 1];
         let changeLabel = "";
 
