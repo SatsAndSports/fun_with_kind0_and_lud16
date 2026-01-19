@@ -10,9 +10,12 @@ const DEFAULT_RELAYS = [
 
 let relays = [...DEFAULT_RELAYS];
 let foundAddresses = new Map(); // lud16 -> pubkey
-let eventsByPubkey = new Map(); // pubkey -> events[]
+let addressRelays = new Map(); // lud16 -> Set<relayUrl>
+let addressElements = new Map(); // lud16 -> DOM element
+let eventsByPubkey = new Map(); // pubkey -> events[] (event now includes seenOn Set)
 let isRunning = false;
 let pool = new SimplePool();
+let activeSubs = [];
 
 const DOM = {
     relayInput: document.getElementById('relayInput'),
@@ -139,36 +142,44 @@ async function toggleDiscovery() {
 async function startDiscovery() {
     isRunning = true;
     foundAddresses.clear();
+    addressRelays.clear();
+    addressElements.clear();
     eventsByPubkey.clear();
+    activeSubs = [];
     DOM.addressList.innerHTML = '';
     DOM.foundCount.textContent = '0';
     DOM.startBtn.textContent = 'Stop Discovery';
     updateStatus('Connecting to relays...');
 
     const filter = { kinds: [0], limit: 50 };
-    const sub = pool.subscribeMany(relays, [filter], {
-        onevent(event) {
-            if (isRunning) processEvent(event);
-        },
-        oneose() {
-            if (isRunning) {
-                updateStatus('Searching for more events...');
-            } else {
-                console.log('[Info] oneose ignored because isRunning is false');
+    
+    // Subscribe to each relay individually to track source
+    relays.forEach(url => {
+        const sub = pool.subscribeMany([url], [filter], {
+            onevent(event) {
+                if (isRunning) processEvent(event, url);
+            },
+            oneose() {
+                if (isRunning) {
+                    console.log(`[Info] EOSE received from ${url}`);
+                    // We only update status to "Searching..." if we haven't already
+                    if (DOM.status.textContent.includes('Connecting')) {
+                        updateStatus('Searching for more events...');
+                    }
+                }
             }
-        }
+        });
+        activeSubs.push(sub);
     });
-
-    window.activeSub = sub;
 }
 
 function stopDiscovery(reason = "stopped") {
     console.log(`[Action] stopDiscovery called with reason: ${reason}`);
     isRunning = false;
-    if (window.activeSub) {
-        window.activeSub.close();
-        window.activeSub = null;
-    }
+    
+    activeSubs.forEach(sub => sub.close());
+    activeSubs = [];
+    
     DOM.startBtn.textContent = 'Start Discovery';
     
     if (reason === "goal") {
@@ -178,11 +189,11 @@ function stopDiscovery(reason = "stopped") {
     }
 }
 
-function processEvent(event) {
-    if (!isRunning || foundAddresses.size >= 21) return;
-
+function processEvent(event, relayUrl) {
+    // We allow processing even if foundAddresses.size >= 21 ONLY if the address is already known (to update relay count)
+    // But we stop starting new ones.
+    
     try {
-        const content = JSON.parse(event.content);
         const pubkey = event.pubkey;
 
         // Store event in history
@@ -191,25 +202,50 @@ function processEvent(event) {
         }
         const history = eventsByPubkey.get(pubkey);
         
-        // Avoid duplicate events
-        if (history.some(e => e.id === event.id)) return;
+        // Find if we already have this specific event
+        let existingEvent = history.find(e => e.id === event.id);
         
-        history.push(event);
-        // Sort history: newest first
-        history.sort((a, b) => b.created_at - a.created_at);
+        if (existingEvent) {
+            // Already seen this event, just add the relay to the set
+            existingEvent.seenOn.add(relayUrl);
+        } else {
+            // New event for this pubkey
+            const eventWithRelay = {
+                ...event,
+                seenOn: new Set([relayUrl])
+            };
+            history.push(eventWithRelay);
+            // Sort history: newest first
+            history.sort((a, b) => b.created_at - a.created_at);
+        }
 
         // Process lud16 from the NEWEST event
-        const latestContent = JSON.parse(history[0].content);
+        const latestEvent = history[0];
+        const latestContent = JSON.parse(latestEvent.content);
         const lud16 = latestContent.lud16;
 
-        if (lud16 && !foundAddresses.has(lud16)) {
-            foundAddresses.set(lud16, pubkey);
-            renderAddress(lud16, pubkey);
-            DOM.foundCount.textContent = foundAddresses.size;
-            console.log(`[Discovery] Found address ${foundAddresses.size}/21: ${lud16}`);
+        if (lud16) {
+            // Track relays for this address
+            if (!addressRelays.has(lud16)) {
+                addressRelays.set(lud16, new Set());
+            }
+            const relaysForAddress = addressRelays.get(lud16);
+            relaysForAddress.add(relayUrl);
 
-            if (foundAddresses.size >= 21) {
-                stopDiscovery("goal");
+            if (!foundAddresses.has(lud16)) {
+                if (foundAddresses.size < 21) {
+                    foundAddresses.set(lud16, pubkey);
+                    renderAddress(lud16, pubkey);
+                    DOM.foundCount.textContent = foundAddresses.size;
+                    console.log(`[Discovery] Found address ${foundAddresses.size}/21: ${lud16}`);
+
+                    if (foundAddresses.size >= 21) {
+                        stopDiscovery("goal");
+                    }
+                }
+            } else {
+                // Update existing UI element with new relay count
+                updateAddressUI(lud16);
             }
         }
     } catch (e) {
@@ -219,11 +255,25 @@ function processEvent(event) {
 
 function renderAddress(lud16, pubkey) {
     const li = document.createElement('li');
+    li.id = `addr-${btoa(lud16).replace(/=/g, '')}`;
+    const relayCount = addressRelays.get(lud16).size;
     li.innerHTML = `
-        <span><strong>Found:</strong> ${lud16}</span>
+        <span class="addr-text"><strong>Found on ${relayCount} relay${relayCount > 1 ? 's' : ''}:</strong> ${lud16}</span>
         <button class="view-stats-btn" onclick="showStats('${pubkey}')">Stats</button>
     `;
     DOM.addressList.appendChild(li);
+    addressElements.set(lud16, li);
+}
+
+function updateAddressUI(lud16) {
+    const li = addressElements.get(lud16);
+    if (li) {
+        const relayCount = addressRelays.get(lud16).size;
+        const textSpan = li.querySelector('.addr-text');
+        if (textSpan) {
+            textSpan.innerHTML = `<strong>Found on ${relayCount} relay${relayCount > 1 ? 's' : ''}:</strong> ${lud16}`;
+        }
+    }
 }
 
 // --- Stats Logic ---
@@ -251,11 +301,16 @@ window.showStats = (pubkey) => {
             } catch (e) {}
         }
 
+        const relayList = Array.from(event.seenOn).map(url => url.replace('wss://', '').replace('ws://', '')).join(', ');
+
         return `
             <li class="timeline-item">
                 <div class="timestamp">${date}</div>
                 <div><strong>Name:</strong> ${content.display_name || content.name || 'N/A'}</div>
                 <div><strong>lud16:</strong> ${content.lud16 || 'N/A'}</div>
+                <div style="font-size: 0.75rem; color: #888; margin-top: 4px;">
+                    <strong>Seen on:</strong> ${relayList}
+                </div>
                 ${changeLabel}
             </li>
         `;
