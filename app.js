@@ -52,9 +52,17 @@ function setupEventListeners() {
 // --- Relay Logic ---
 async function verifyRelay(url) {
     return new Promise((resolve) => {
-        const ws = new WebSocket(url);
+        let ws;
+        try {
+            ws = new WebSocket(url);
+        } catch (e) {
+            console.error(`[Error] Invalid WebSocket URL: ${url}`, e);
+            resolve(false);
+            return;
+        }
+
         const timeout = setTimeout(() => {
-            ws.close();
+            if (ws) ws.close();
             resolve(false);
         }, 3000);
 
@@ -71,8 +79,23 @@ async function verifyRelay(url) {
 }
 
 async function handleAddRelay() {
-    const url = DOM.relayInput.value.trim();
-    if (!url || relays.includes(url)) return;
+    let url = DOM.relayInput.value.trim();
+    
+    // Basic sanitization
+    if (url.startsWith('wss:://')) url = url.replace('wss:://', 'wss://');
+    if (url.startsWith('ws:://')) url = url.replace('ws:://', 'ws://');
+    
+    if (!url) return;
+    
+    if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
+        alert('URL must start with ws:// or wss://');
+        return;
+    }
+
+    if (relays.includes(url)) {
+        alert('Relay already in list.');
+        return;
+    }
 
     DOM.addRelayBtn.disabled = true;
     updateStatus(`Verifying ${url}...`);
@@ -84,7 +107,7 @@ async function handleAddRelay() {
         DOM.relayInput.value = '';
         updateStatus('Relay added.');
     } else {
-        alert('Could not connect to relay.');
+        alert('Could not connect to relay. Please check the URL and your connection.');
         updateStatus('Failed to add relay.');
     }
     DOM.addRelayBtn.disabled = false;
