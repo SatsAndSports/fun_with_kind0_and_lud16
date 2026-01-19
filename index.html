@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nostr lud16 Finder</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Nostr lud16 Finder</h1>
+        
+        <section class="relay-management">
+            <h2>Relays</h2>
+            <div class="input-group">
+                <input type="text" id="relayInput" placeholder="wss://relay.example.com">
+                <button id="addRelayBtn">Add Relay</button>
+            </div>
+            <ul id="relayList"></ul>
+        </section>
+
+        <section class="controls">
+            <button id="startBtn" class="primary-btn">Start Discovery</button>
+            <div id="status">Ready</div>
+            <div class="progress">Found: <span id="foundCount">0</span>/21</div>
+        </section>
+
+        <section class="results-section">
+            <div class="results-header">
+                <h2>Found Addresses</h2>
+            </div>
+            <ul id="addressList"></ul>
+        </section>
+
+        <div id="statsModal" class="modal hidden">
+            <div class="modal-content">
+                <span class="close-btn">&times;</span>
+                <h3>User History</h3>
+                <div id="userStats"></div>
+                <ul id="historyTimeline"></ul>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+          "imports": {
+            "nostr-tools": "https://esm.sh/nostr-tools@2.7.0"
+          }
+        }
+    </script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>
