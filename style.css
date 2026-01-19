@@ -118,8 +118,19 @@ button:disabled {
     border-radius: 6px;
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     gap: 15px;
+}
+
+.addr-info {
+    flex-grow: 1;
+    min-width: 0;
+}
+
+.addr-meta {
+    font-size: 0.8rem;
+    color: #888;
+    margin-top: 5px;
 }
 
 #addressList li span {

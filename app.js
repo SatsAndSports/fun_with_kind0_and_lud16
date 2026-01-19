@@ -5,7 +5,10 @@ const DEFAULT_RELAYS = [
     'wss://relay.damus.io',
     'wss://nos.lol',
     'wss://relay.snort.social',
-    'wss://purplepag.es'
+    'wss://purplepag.es',
+    'wss://relay.nostr.band', // Archival/Search
+    'wss://relay.noswhere.com', // Indexer
+    'wss://relay.nostr.bg'
 ];
 
 let relays = [...DEFAULT_RELAYS];
@@ -151,9 +154,9 @@ async function startDiscovery() {
     DOM.startBtn.textContent = 'Stop Discovery';
     updateStatus('Connecting to relays...');
 
-    const filter = { kinds: [0], limit: 50 };
+    // Filter with higher limit for initial crawl
+    const filter = { kinds: [0], limit: 100 };
     
-    // Subscribe to each relay individually to track source
     relays.forEach(url => {
         const sub = pool.subscribeMany([url], [filter], {
             onevent(event) {
@@ -162,7 +165,6 @@ async function startDiscovery() {
             oneose() {
                 if (isRunning) {
                     console.log(`[Info] EOSE received from ${url}`);
-                    // We only update status to "Searching..." if we haven't already
                     if (DOM.status.textContent.includes('Connecting')) {
                         updateStatus('Searching for more events...');
                     }
@@ -190,75 +192,68 @@ function stopDiscovery(reason = "stopped") {
 }
 
 function processEvent(event, relayUrl) {
-    // We allow processing even if foundAddresses.size >= 21 ONLY if the address is already known (to update relay count)
-    // But we stop starting new ones.
-    
     try {
         const pubkey = event.pubkey;
 
-        // Store event in history
         if (!eventsByPubkey.has(pubkey)) {
             eventsByPubkey.set(pubkey, []);
         }
         const history = eventsByPubkey.get(pubkey);
         
-        // Find if we already have this specific event
         let existingEvent = history.find(e => e.id === event.id);
         
         if (existingEvent) {
-            // Already seen this event, just add the relay to the set
             existingEvent.seenOn.add(relayUrl);
         } else {
-            // New event for this pubkey
             const eventWithRelay = {
                 ...event,
                 seenOn: new Set([relayUrl])
             };
             history.push(eventWithRelay);
-            // Sort history: newest first
             history.sort((a, b) => b.created_at - a.created_at);
         }
 
-        // Process lud16 from the NEWEST event
         const latestEvent = history[0];
         const latestContent = JSON.parse(latestEvent.content);
         const lud16 = latestContent.lud16;
 
         if (lud16) {
-            // Track relays for this address
             if (!addressRelays.has(lud16)) {
                 addressRelays.set(lud16, new Set());
             }
-            const relaysForAddress = addressRelays.get(lud16);
-            relaysForAddress.add(relayUrl);
+            addressRelays.get(lud16).add(relayUrl);
 
             if (!foundAddresses.has(lud16)) {
                 if (foundAddresses.size < 21) {
                     foundAddresses.set(lud16, pubkey);
                     renderAddress(lud16, pubkey);
                     DOM.foundCount.textContent = foundAddresses.size;
-                    console.log(`[Discovery] Found address ${foundAddresses.size}/21: ${lud16}`);
 
                     if (foundAddresses.size >= 21) {
                         stopDiscovery("goal");
                     }
                 }
             } else {
-                // Update existing UI element with new relay count
                 updateAddressUI(lud16);
             }
         }
-    } catch (e) {
-        // Skip malformed content
-    }
+    } catch (e) {}
 }
 
 function renderAddress(lud16, pubkey) {
     const li = document.createElement('li');
     li.id = `addr-${btoa(lud16).replace(/=/g, '')}`;
     const relayCount = addressRelays.get(lud16).size;
+    const eventCount = eventsByPubkey.get(pubkey).length;
+    
     li.innerHTML = `
-        <span class="addr-text"><strong>Found on ${relayCount} relay${relayCount > 1 ? 's' : ''}:</strong> ${lud16}</span>
+        <div class="addr-info">
+            <span class="addr-text"><strong>Found:</strong> ${lud16}</span>
+            <div class="addr-meta">
+                Seen on ${relayCount} relay${relayCount > 1 ? 's' : ''} 
+                • ${eventCount} version${eventCount > 1 ? 's' : ''} found
+            </div>
+        </div>
         <button class="view-stats-btn" onclick="showStats('${pubkey}')">Stats</button>
     `;
     DOM.addressList.appendChild(li);
@@ -268,20 +263,49 @@ function renderAddress(lud16, pubkey) {
 function updateAddressUI(lud16) {
     const li = addressElements.get(lud16);
     if (li) {
+        const pubkey = foundAddresses.get(lud16);
         const relayCount = addressRelays.get(lud16).size;
-        const textSpan = li.querySelector('.addr-text');
-        if (textSpan) {
-            textSpan.innerHTML = `<strong>Found on ${relayCount} relay${relayCount > 1 ? 's' : ''}:</strong> ${lud16}`;
+        const eventCount = eventsByPubkey.get(pubkey).length;
+        const metaDiv = li.querySelector('.addr-meta');
+        if (metaDiv) {
+            metaDiv.innerHTML = `
+                Seen on ${relayCount} relay${relayCount > 1 ? 's' : ''} 
+                • ${eventCount} version${eventCount > 1 ? 's' : ''} found
+            `;
         }
     }
 }
 
 // --- Stats Logic ---
-window.showStats = (pubkey) => {
+window.showStats = async (pubkey) => {
+    // Show modal with existing data immediately
+    renderStatsModal(pubkey);
+    
+    // Trigger targeted background fetch for deep history
+    console.log(`[Deep Fetch] Querying all relays for history of ${pubkey}...`);
+    const historyFilter = { kinds: [0], authors: [pubkey] };
+    
+    // Subscribe without limit to wake up archival relays
+    const sub = pool.subscribeMany(relays, [historyFilter], {
+        onevent(event) {
+            // We reuse processEvent but since we're in the modal, we update UI
+            // We pass null for relay since subscribeMany merges, but we can't easily track here
+            // (Standard relays will return the same ones we have, archival might return new ones)
+            processEvent(event, "deep-fetch");
+            renderStatsModal(pubkey); 
+        }
+    });
+
+    // Auto-close deep sub after 5 seconds to prevent hanging
+    setTimeout(() => sub.close(), 5000);
+};
+
+function renderStatsModal(pubkey) {
     const history = eventsByPubkey.get(pubkey) || [];
     DOM.userStats.innerHTML = `
-        <p><strong>Pubkey:</strong> ${pubkey.substring(0, 8)}...${pubkey.substring(pubkey.length - 8)}</p>
-        <p><strong>Total Metadata Events:</strong> ${history.length}</p>
+        <p><strong>Pubkey:</strong> ${pubkey}</p>
+        <p style="color: var(--secondary)"><strong>Total Profile Versions Found:</strong> ${history.length}</p>
+        <p style="font-size: 0.8rem; opacity: 0.7;">Clicking stats triggers a deep search across all relays for historical versions.</p>
     `;
 
     DOM.historyTimeline.innerHTML = history.map((event, index) => {
@@ -295,28 +319,35 @@ window.showStats = (pubkey) => {
         if (nextEvent) {
             try {
                 const oldContent = JSON.parse(nextEvent.content);
-                if (oldContent.display_name !== content.display_name || oldContent.name !== content.name) {
-                    changeLabel = `<div style="color: var(--secondary)">Name changed from "${oldContent.display_name || oldContent.name || 'None'}"</div>`;
+                const nameChanged = (oldContent.display_name || oldContent.name) !== (content.display_name || content.name);
+                const lud16Changed = oldContent.lud16 !== content.lud16;
+                
+                if (nameChanged) {
+                    changeLabel += `<div style="color: var(--secondary); font-size: 0.8rem;">↑ Name updated from "${oldContent.display_name || oldContent.name || 'None'}"</div>`;
+                }
+                if (lud16Changed) {
+                    changeLabel += `<div style="color: #4caf50; font-size: 0.8rem;">↑ lud16 updated from "${oldContent.lud16 || 'None'}"</div>`;
                 }
             } catch (e) {}
         }
 
-        const relayList = Array.from(event.seenOn).map(url => url.replace('wss://', '').replace('ws://', '')).join(', ');
+        const relayList = Array.from(event.seenOn)
+            .filter(r => r !== "deep-fetch")
+            .map(url => url.replace('wss://', '').replace('ws://', ''))
+            .join(', ');
 
         return `
             <li class="timeline-item">
                 <div class="timestamp">${date}</div>
                 <div><strong>Name:</strong> ${content.display_name || content.name || 'N/A'}</div>
                 <div><strong>lud16:</strong> ${content.lud16 || 'N/A'}</div>
-                <div style="font-size: 0.75rem; color: #888; margin-top: 4px;">
-                    <strong>Seen on:</strong> ${relayList}
-                </div>
+                ${relayList ? `<div style="font-size: 0.7rem; color: #888; margin-top: 4px;"><strong>Sources:</strong> ${relayList}</div>` : ''}
                 ${changeLabel}
             </li>
         `;
     }).join('');
 
     DOM.statsModal.classList.remove('hidden');
-};
+}
 
 init();
