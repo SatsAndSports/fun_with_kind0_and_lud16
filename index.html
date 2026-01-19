@@ -34,10 +34,23 @@
 
         <div id="statsModal" class="modal hidden">
             <div class="modal-content">
-                <span class="close-btn">&times;</span>
+                <span class="close-btn" onclick="document.getElementById('statsModal').classList.add('hidden')">&times;</span>
                 <h3>User History</h3>
                 <div id="userStats"></div>
                 <ul id="historyTimeline"></ul>
+            </div>
+        </div>
+
+        <div id="payModal" class="modal hidden">
+            <div class="modal-content">
+                <span class="close-btn" onclick="document.getElementById('payModal').classList.add('hidden')">&times;</span>
+                <h3>Lightning Payment</h3>
+                <div id="payStatus">Verifying...</div>
+                <div id="qrContainer">
+                    <canvas id="qrCanvas"></canvas>
+                </div>
+                <div id="payAddr" class="addr-meta" style="margin-top: 15px; text-align: center; word-break: break-all;"></div>
+                <p style="font-size: 0.8rem; margin-top: 20px; text-align: center;">Scan with a Lightning wallet to send sats.</p>
             </div>
         </div>
     </div>
@@ -45,7 +58,8 @@
     <script type="importmap">
         {
           "imports": {
-            "nostr-tools": "https://esm.sh/nostr-tools@2.7.0"
+            "nostr-tools": "https://esm.sh/nostr-tools@2.7.0",
+            "qrcode": "https://esm.sh/qrcode@1.5.3"
           }
         }
     </script>

@@ -1,4 +1,5 @@
 import { SimplePool } from 'nostr-tools';
+import QRCode from 'qrcode';
 
 // --- State ---
 const DEFAULT_RELAYS = [
@@ -29,9 +30,13 @@ const DOM = {
     foundCount: document.getElementById('foundCount'),
     addressList: document.getElementById('addressList'),
     statsModal: document.getElementById('statsModal'),
+    payModal: document.getElementById('payModal'),
     userStats: document.getElementById('userStats'),
     historyTimeline: document.getElementById('historyTimeline'),
-    closeModal: document.querySelector('.close-btn')
+    payStatus: document.getElementById('payStatus'),
+    payAddr: document.getElementById('payAddr'),
+    qrCanvas: document.getElementById('qrCanvas'),
+    closeBtns: document.querySelectorAll('.close-btn')
 };
 
 // Helper to update status with logging
@@ -49,9 +54,10 @@ function init() {
 function setupEventListeners() {
     DOM.addRelayBtn.onclick = handleAddRelay;
     DOM.startBtn.onclick = toggleDiscovery;
-    DOM.closeModal.onclick = () => DOM.statsModal.classList.add('hidden');
     window.onclick = (e) => {
-        if (e.target === DOM.statsModal) DOM.statsModal.classList.add('hidden');
+        if (e.target.classList.contains('modal')) {
+            e.target.classList.add('hidden');
+        }
     };
 }
 
@@ -254,7 +260,10 @@ function renderAddress(lud16, pubkey) {
                 • ${eventCount} version${eventCount > 1 ? 's' : ''} found
             </div>
         </div>
-        <button class="view-stats-btn" onclick="showStats('${pubkey}')">Stats</button>
+        <div class="btn-group">
+            <button class="pay-btn" onclick="showPayModal('${lud16}')">⚡</button>
+            <button class="view-stats-btn" onclick="showStats('${pubkey}')">Stats</button>
+        </div>
     `;
     DOM.addressList.appendChild(li);
     addressElements.set(lud16, li);
@@ -278,25 +287,15 @@ function updateAddressUI(lud16) {
 
 // --- Stats Logic ---
 window.showStats = async (pubkey) => {
-    // Show modal with existing data immediately
     renderStatsModal(pubkey);
-    
-    // Trigger targeted background fetch for deep history
     console.log(`[Deep Fetch] Querying all relays for history of ${pubkey}...`);
     const historyFilter = { kinds: [0], authors: [pubkey] };
-    
-    // Subscribe without limit to wake up archival relays
     const sub = pool.subscribeMany(relays, [historyFilter], {
         onevent(event) {
-            // We reuse processEvent but since we're in the modal, we update UI
-            // We pass null for relay since subscribeMany merges, but we can't easily track here
-            // (Standard relays will return the same ones we have, archival might return new ones)
             processEvent(event, "deep-fetch");
             renderStatsModal(pubkey); 
         }
     });
-
-    // Auto-close deep sub after 5 seconds to prevent hanging
     setTimeout(() => sub.close(), 5000);
 };
 
@@ -305,7 +304,7 @@ function renderStatsModal(pubkey) {
     DOM.userStats.innerHTML = `
         <p><strong>Pubkey:</strong> ${pubkey}</p>
         <p style="color: var(--secondary)"><strong>Total Profile Versions Found:</strong> ${history.length}</p>
-        <p style="font-size: 0.8rem; opacity: 0.7;">Clicking stats triggers a deep search across all relays for historical versions.</p>
+        <p style="font-size: 0.8rem; opacity: 0.7;">Deep search active for 5s...</p>
     `;
 
     DOM.historyTimeline.innerHTML = history.map((event, index) => {
@@ -349,6 +348,66 @@ function renderStatsModal(pubkey) {
     }).join('');
 
     DOM.statsModal.classList.remove('hidden');
+}
+
+// --- Payment Logic ---
+window.showPayModal = async (lud16) => {
+    DOM.payAddr.textContent = lud16;
+    DOM.payStatus.textContent = "Verifying Lightning Address...";
+    DOM.payStatus.style.color = "white";
+    DOM.payModal.classList.remove('hidden');
+
+    // Clear previous QR
+    const ctx = DOM.qrCanvas.getContext('2d');
+    ctx.clearRect(0, 0, DOM.qrCanvas.width, DOM.qrCanvas.height);
+
+    const isValid = await verifyLightningAddress(lud16);
+    
+    if (isValid) {
+        DOM.payStatus.textContent = "Address Verified ✅";
+        DOM.payStatus.style.color = "#4caf50";
+    } else {
+        DOM.payStatus.textContent = "Verification Failed/Blocked (CORS) ⚠️";
+        DOM.payStatus.style.color = "#f44336";
+    }
+
+    // Generate QR regardless (LNURL-pay format)
+    try {
+        const lnurl = lud16ToLnurlPay(lud16);
+        await QRCode.toCanvas(DOM.qrCanvas, lnurl, {
+            width: 250,
+            margin: 2,
+            color: {
+                dark: '#000000',
+                light: '#ffffff'
+            }
+        });
+    } catch (err) {
+        console.error(err);
+        DOM.payStatus.textContent = "QR Generation Error";
+    }
+};
+
+async function verifyLightningAddress(lud16) {
+    const [user, domain] = lud16.split('@');
+    if (!user || !domain) return false;
+
+    const url = `https://${domain}/.well-known/lnurlp/${user}`;
+    try {
+        const response = await fetch(url);
+        const data = await response.json();
+        return data.tag === "payRequest";
+    } catch (e) {
+        console.warn("[Payment] Fetch verification failed (likely CORS):", e);
+        return false;
+    }
+}
+
+function lud16ToLnurlPay(lud16) {
+    // For QR codes, many wallets accept the lightning: address format
+    // or the raw lightning address. LNURL-pay standard often uses the URL
+    // but the lightning: prefix is widely compatible.
+    return `lightning:${lud16}`;
 }
 
 init();

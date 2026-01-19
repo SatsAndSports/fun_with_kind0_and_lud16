@@ -139,10 +139,43 @@ button:disabled {
     min-width: 0;
 }
 
-.view-stats-btn {
-    background: #444;
+.view-stats-btn, .pay-btn {
     font-size: 0.8rem;
     flex-shrink: 0;
+}
+
+.view-stats-btn {
+    background: #444;
+}
+
+.pay-btn {
+    background: var(--secondary);
+    color: black;
+}
+
+.btn-group {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+#qrContainer {
+    display: flex;
+    justify-content: center;
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    margin: 20px 0;
+}
+
+#qrCanvas {
+    max-width: 100%;
+}
+
+#payStatus {
+    text-align: center;
+    font-weight: bold;
+    margin-bottom: 10px;
 }
 
 /* Modal */
